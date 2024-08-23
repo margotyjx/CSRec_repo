@@ -1,7 +1,7 @@
-# CSREC390
+# CSREC
 
 ## Overview
-This GitHub repo is for the review process only. The full dataset and data generation process will be released upon acceptance. 
+This GitHub repo is for paper *CSRec: Rethinking Sequential Recommendation from A Causal Perspective*
 
 ## Running
 ### Environment setting
