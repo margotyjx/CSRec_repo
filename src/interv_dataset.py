@@ -3,8 +3,21 @@ import numpy as np
 import torch
 import os
 from scipy.sparse import csr_matrix
-from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler, Sampler
 import random
+
+
+class BootstrapSampler(Sampler):
+    def __init__(self, dataset, num_samples=None):
+        self.dataset = dataset
+        self.num_samples = num_samples if num_samples else len(dataset)
+
+    def __iter__(self):
+        indices = torch.randint(len(self.dataset), (self.num_samples,))
+        return iter(indices.tolist())
+
+    def __len__(self):
+        return self.num_samples
 
 class RecDataset_interv(Dataset):
     def __init__(self, args, user_seq, rec_seq, dec_seq, pred_step = 1, test_neg_items=None, data_type='train'):
@@ -210,8 +223,8 @@ def get_user_seqs_and_max_item(data_file):
     user_seq = []
     item_set = set()
     for line in lines:
-        user, items = line.strip().split(' ', 1)
-        items = items.split()
+        user, items = line.strip().split(',', 1)
+        items = items.split(",")
         items = [int(item) for item in items]
         user_seq.append(items)
         item_set = item_set | set(items)
@@ -223,8 +236,8 @@ def get_user_seqs(data_file):
     user_seq = []
     item_set = set()
     for line in lines:
-        user, items = line.strip().split(' ', 1)
-        items = items.split(' ')
+        user, items = line.strip().split(',', 1)
+        items = items.split(',')
         items = [int(item) for item in items]
         user_seq.append(items)
         item_set = item_set | set(items)
@@ -242,15 +255,15 @@ def get_rec_seqs(rec_data_file, dec_data_file):
     item_set = set()
     assert len(rec_lines) == len(dec_lines)
     for line in rec_lines:
-        user, recitems = line.strip().split(' ', 1)
-        recitems = recitems.split(' ')
+        user, recitems = line.strip().split(',', 1)
+        recitems = recitems.split(',')
         recitems = [int(item) for item in recitems]
         rec_seq.append(recitems)
         rec_item_set = item_set | set(recitems)
 
     for line in dec_lines:
-        user, decitems = line.strip().split(' ', 1)
-        decitems = decitems.split(' ')
+        user, decitems = line.strip().split(',', 1)
+        decitems = decitems.split(',')
         decitems = [int(item) for item in decitems]
         dec_seq.append(decitems)
         dec_item_set = item_set | set(decitems)
@@ -258,6 +271,64 @@ def get_rec_seqs(rec_data_file, dec_data_file):
     num_users = len(rec_lines)
 
     return rec_seq, dec_seq, num_users
+
+
+
+# 
+# def get_user_seqs_and_max_item(data_file):
+#     lines = open(data_file).readlines()
+#     lines = lines[1:]
+#     user_seq = []
+#     item_set = set()
+#     for line in lines:
+#         user, items = line.strip().split(' ', 1)
+#         items = items.split(' ')
+#         items = [int(item) for item in items]
+#         user_seq.append(items)
+#         item_set = item_set | set(items)
+#     max_item = max(item_set)
+#     return user_seq, max_item
+
+# def get_user_seqs(data_file):
+#     lines = open(data_file).readlines()
+#     user_seq = []
+#     item_set = set()
+#     for line in lines:
+#         user, items = line.strip().split(' ', 1)
+#         items = items.split(' ')
+#         items = [int(item) for item in items]
+#         user_seq.append(items)
+#         item_set = item_set | set(items)
+#     max_item = max(item_set)
+#     num_users = len(lines)
+
+#     return user_seq, max_item, num_users
+
+# def get_rec_seqs(rec_data_file, dec_data_file):
+#     # would expect that the index of rec datafile and dec datafile the same as seq datafile
+#     rec_lines = open(rec_data_file).readlines()
+#     dec_lines = open(dec_data_file).readlines()
+#     rec_seq = []
+#     dec_seq = []
+#     item_set = set()
+#     assert len(rec_lines) == len(dec_lines)
+#     for line in rec_lines:
+#         user, recitems = line.strip().split(' ', 1)
+#         recitems = recitems.split(' ')
+#         recitems = [int(item) for item in recitems]
+#         rec_seq.append(recitems)
+#         rec_item_set = item_set | set(recitems)
+
+#     for line in dec_lines:
+#         user, decitems = line.strip().split(' ', 1)
+#         decitems = decitems.split(' ')
+#         decitems = [int(item) for item in decitems]
+#         dec_seq.append(decitems)
+#         dec_item_set = item_set | set(decitems)
+
+#     num_users = len(rec_lines)
+
+#     return rec_seq, dec_seq, num_users
 
 def get_seq_dic(args):
     args.obs_data_file = args.data_dir + args.obs_data_name + '.txt'
@@ -288,7 +359,7 @@ def get_dataloder(args,seq_dic, train = True, test = True, pred_steps = 3):
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.batch_size, num_workers=args.num_workers)
     if test:
         test_dataset = RecDataset_interv(args, seq_dic['user_seq'], seq_dic['rec_seq'], seq_dic['dec_seq'], pred_step= pred_steps, data_type='test')
-        test_sampler = SequentialSampler(test_dataset)
+        test_sampler = BootstrapSampler(test_dataset)
         test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.batch_size, num_workers=args.num_workers)
 
     return train_dataloader, eval_dataloader, test_dataloader

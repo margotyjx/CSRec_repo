@@ -8,17 +8,34 @@ from utils import EarlyStopping, check_path, set_seed, parse_args, set_logger
 from interv_dataset import get_seq_dic, get_dataloder, generation_matrix_flex
 import obs_dataset
 from model.csrec import CSRecModel
+from sklearn.metrics import roc_auc_score
+
 
 def sigmoid(x):
   return 1 / (1 + np.exp(-x))
 
-def interv_metric(pred_list_interv, answer_list_interv,logger):
+def interv_metric(pred_list_interv, answer_list_interv,logger, ratio = 0.2):
+    count1 = 0.9
+    count2 = 0.8
+    count3 = 0.5
+    # interv_err = torch.nn.BCELoss()(torch.from_numpy(pred_list_interv).to(torch.float32), torch.from_numpy(answer_list_interv).to(torch.float32))
+    pred_list_interv_convert_1 = np.piecewise(pred_list_interv, [pred_list_interv < count1, pred_list_interv >= count1], [0, 1])
+    pred_list_interv_convert_2 = np.piecewise(pred_list_interv, [pred_list_interv < count2, pred_list_interv >= count2], [0, 1])
+    pred_list_interv_convert_3 = np.piecewise(pred_list_interv, [pred_list_interv < count3, pred_list_interv >= count3], [0, 1])
+
+    equal1 = np.argwhere(np.equal(pred_list_interv_convert_1, answer_list_interv)==True)
+    equal2 = np.argwhere(np.equal(pred_list_interv_convert_2, answer_list_interv)==True)
+    equal3 = np.argwhere(np.equal(pred_list_interv_convert_3, answer_list_interv)==True)
+
     interv_err = torch.nn.BCELoss()(torch.from_numpy(pred_list_interv).to(torch.float32), torch.from_numpy(answer_list_interv).to(torch.float32))
-    equal = np.argwhere(np.equal(np.piecewise(pred_list_interv, [pred_list_interv < 0.8, pred_list_interv >= 0.8], [0, 1]), answer_list_interv)==True)
-
-    logger.info('interventional error, BCE loss: {}, accuracy percentage: {}'.format(interv_err, len(equal)/(len(pred_list_interv)*len(pred_list_interv[0]))))
-
-    return [len(equal)/(len(pred_list_interv)*len(pred_list_interv[0]))]
+    
+    logger.info('interventional error, BCE loss: {}, accuracy percentage @ 0.1: {}, @ 0.2: {}, @ 0.5: {}, AUC: {}'.format(interv_err, 
+                len(equal1)/(len(pred_list_interv)*len(pred_list_interv[0])), 
+                len(equal2)/(len(pred_list_interv)*len(pred_list_interv[0])),
+                len(equal3)/(len(pred_list_interv)*len(pred_list_interv[0])),
+                roc_auc_score(answer_list_interv, pred_list_interv)))
+    
+    return [len(equal2)/(len(pred_list_interv)*len(pred_list_interv[0]))]
 
 def main():
 
@@ -79,13 +96,13 @@ def main():
             args.checkpoint_path = os.path.join(args.output_dir, args.load_model + '.pt')
             trainer.load(args.checkpoint_path)
             logger.info(f"Load model from {args.checkpoint_path} for test!")
-            test_info, test_score, pred_list_interv, answer_list_interv = trainer.test(0, seq_dic['num_users'])
+            interv_test_score, test_score, pred_list_interv, answer_list_interv = trainer.test(0, seq_dic['num_users'])
 # train model
     else:
         early_stopping = EarlyStopping(args.checkpoint_path, logger=logger, patience=args.patience, verbose=True)
         for epoch in range(args.epochs):
             trainer.train(epoch, seq_dic['num_users'], args.TE_model)
-            test_score, pred_list_interv, answer_list_interv = trainer.valid(0)
+            interv_test_score, test_score, pred_list_interv, answer_list_interv = trainer.valid(0)
             if args.TE_model:
                 early_stopping(np.array(test_score[-1:]), trainer.model)
             else:
@@ -95,27 +112,19 @@ def main():
             if early_stopping.early_stop:
                 logger.info("Early stopping")
                 break
-            
+
         print('args checkpoint_path: ', args.checkpoint_path)
 
         logger.info("---------------Test Score---------------")
         trainer.model.load_state_dict(torch.load(args.checkpoint_path))
-        test_score, pred_list_interv, answer_list_interv = trainer.test(0, seq_dic['num_users'])
-
-        # test_info = {
-        #     "HR@5": '{:.4f}'.format(test_score[0]), "NDCG@5": '{:.4f}'.format(test_score[1]),
-        #     "HR@10": '{:.4f}'.format(test_score[2]), "NDCG@10": '{:.4f}'.format(test_score[3]),
-        #     "HR@20": '{:.4f}'.format(test_score[4]), "NDCG@20": '{:.4f}'.format(test_score[5])
-        # }
-
+        interv_test_score, test_score, pred_list_interv, answer_list_interv = trainer.test(0, seq_dic['num_users'])
 
     if args.TE_model:
         pass
     else:
-        interv_err = interv_metric(pred_list_interv, answer_list_interv,logger)
+        interv_err = interv_metric(pred_list_interv, answer_list_interv,logger, ratio = 0.2)
 
     logger.info(args.train_name)
-    # logger.info(test_info)
 
 
 main()

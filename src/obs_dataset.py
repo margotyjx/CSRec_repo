@@ -192,8 +192,8 @@ def get_user_seqs_and_max_item(data_file):
     user_seq = []
     item_set = set()
     for line in lines:
-        user, items = line.strip().split(' ', 1)
-        items = items.split()
+        user, items = line.strip().split(',', 1)
+        items = items.split(',')
         items = [int(item) for item in items]
         user_seq.append(items)
         item_set = item_set | set(items)
@@ -205,8 +205,8 @@ def get_user_seqs(data_file):
     user_seq = []
     item_set = set()
     for line in lines:
-        user, items = line.strip().split(' ', 1)
-        items = items.split(' ')
+        user, items = line.strip().split(',', 1)
+        items = items.split(',')
         items = [int(item) for item in items]
         user_seq.append(items)
         item_set = item_set | set(items)
@@ -214,6 +214,35 @@ def get_user_seqs(data_file):
     num_users = len(lines)
 
     return user_seq, max_item, num_users
+
+# def get_user_seqs_and_max_item(data_file):
+#     lines = open(data_file).readlines()
+#     lines = lines[1:]
+#     user_seq = []
+#     item_set = set()
+#     for line in lines:
+#         user, items = line.strip().split(' ', 1)
+#         items = items.split(' ')
+#         items = [int(item) for item in items]
+#         user_seq.append(items)
+#         item_set = item_set | set(items)
+#     max_item = max(item_set)
+#     return user_seq, max_item
+
+# def get_user_seqs(data_file):
+#     lines = open(data_file).readlines()
+#     user_seq = []
+#     item_set = set()
+#     for line in lines:
+#         user, items = line.strip().split(' ', 1)
+#         items = items.split(' ')
+#         items = [int(item) for item in items]
+#         user_seq.append(items)
+#         item_set = item_set | set(items)
+#     max_item = max(item_set)
+#     num_users = len(lines)
+
+#     return user_seq, max_item, num_users
 
 def get_seq_dic(args):
 

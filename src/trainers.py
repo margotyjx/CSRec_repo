@@ -3,7 +3,7 @@ import torch
 import numpy as np
 
 from torch.optim import Adam
-from metrics import recall_at_k, ndcg_k
+from metrics import recall_at_k, ndcg_k, interv_metric
 
 class Trainer_rec:
     def __init__(self, model, train_dataloader, eval_dataloader, test_dataloader,interv_dataloader, args, logger):
@@ -39,9 +39,9 @@ class Trainer_rec:
         self.args.train_matrix = self.args.valid_rating_matrix
         return self.iteration(epoch, self.eval_dataloader, self.num_users, self.interv_dataloader, TE_model = False, train=False)
 
-    def test(self, epoch, num_users):
+    def test(self, epoch, num_users, ratio = 0.2):
         self.args.train_matrix = self.args.test_obs_matrix
-        return self.iteration(epoch, self.test_dataloader, num_users, self.interv_dataloader, TE_model = False, train=False)
+        return self.iteration(epoch, self.test_dataloader, num_users, self.interv_dataloader, TE_model = False, train=False, ratio=ratio)
 
     def save(self, file_name):
         torch.save(self.model.cpu().state_dict(), file_name)
@@ -78,8 +78,24 @@ class Trainer_rec:
         self.logger.info(post_fix)
 
         return [recall[0], ndcg[0], recall[1], ndcg[1], recall[3], ndcg[3]], str(post_fix)
+    
+    def get_bootstrap(self, BCE_score, AHR01_score, AHR02_score, AHR05_score, AUC_score):
 
-    def iteration(self, epoch, dataloader, num_users, interv_test_dataloader, TE_model = False, train=True, obs_test = True, interv_test = True):
+        post_fix = {
+            "Avg. BCE": '{:.4f}'.format(np.mean(BCE_score)), "std, BCE": '{:.4f}'.format(np.std(BCE_score)),
+            "Avg. AHR01": '{:.4f}'.format(np.mean(AHR01_score)), "std, AHR01": '{:.4f}'.format(np.std(AHR01_score)),
+            "Avg. AHR02": '{:.4f}'.format(np.mean(AHR02_score)), "std, AHR02": '{:.4f}'.format(np.std(AHR02_score)),
+            "Avg. AHR05": '{:.4f}'.format(np.mean(AHR05_score)), "std, AHR05": '{:.4f}'.format(np.std(AHR05_score)),
+            "Avg. AUC": '{:.4f}'.format(np.mean(AUC_score)), "std, AUC": '{:.4f}'.format(np.std(AUC_score))
+        }
+        self.logger.info(post_fix)
+
+        return [np.mean(BCE_score),np.std(BCE_score), np.mean(AHR01_score), np.std(AHR01_score), 
+                np.mean(AHR02_score), np.std(AHR02_score),np.mean(AHR05_score), np.std(AHR05_score),
+                np.mean(AUC_score), np.std(AUC_score)], str(post_fix)
+    
+
+    def iteration(self, epoch, dataloader, num_users, interv_test_dataloader, TE_model = False, train=True, obs_test = True, interv_test = True, ratio = 0.2):
 
         str_code = "train" if train else "test"
         # Setting the tqdm progress bar
@@ -179,6 +195,11 @@ class Trainer_rec:
             scores, result_info = self.get_full_sort_score(epoch, answer_list_obs, pred_list_obs)
                 
             if interv_test == True:
+                BCE_score = []
+                AHR01_score = []
+                AHR02_score = []
+                AHR05_score = []
+                AUC_score = []
                 for i, batch in interv_data_iter:
                     batch = tuple(t.to(self.device) for t in batch)
                     user_ids, rec_ids, rec_quest, dec_input, user_seq, answers, last_seq = batch
@@ -197,8 +218,9 @@ class Trainer_rec:
                         rating_pred_np = rating_pred_np[:, :-1]
                         rating_pred_np[self.args.test_rating_matrix[batch_user_index].toarray() > 0] = 0
                     
-                    A20 = int(self.item_size * 0.2)
-                    ind = np.argpartition(rating_pred_np, -A20)[:, -A20:]
+                    A = int(self.item_size * ratio)
+
+                    ind = np.argpartition(rating_pred_np, -A)[:, -A:]
                     arr_ind = rating_pred_np[np.arange(len(rating_pred_np))[:, None], ind]
                     arr_ind_argsort = np.argsort(arr_ind)[np.arange(len(rating_pred_np)), ::-1]
                     batch_pred_list = ind[np.arange(len(rating_pred_np))[:, None], arr_ind_argsort]
@@ -219,17 +241,47 @@ class Trainer_rec:
                             prob_rec = (np.array(dec_pred)).reshape(-1,1)
                         else:
                             prob_rec = np.append(prob_rec, (np.array(dec_pred)).reshape(-1,1), axis=1)
+                    
+                    sorted_ind = np.argsort(rating_pred_np, axis=1)[:, ::-1]  # Sort indices by descending scores
+                    prob = []  # Initialize to store the indices of ground truth in sorted predictions
+
+                    for step in range(pred_step):
+                        step_indices = []  # Store indices of ground truth for this step
+
+                        for usr, ans in enumerate(rec_quest[:, step].cpu().data.numpy()):
+                            # Find the position of the correct answer in the sorted predictions
+                            if ans in sorted_ind[usr]:
+                                index = np.where(sorted_ind[usr] == ans)[0][0]  # Get the index of `ans` in the sorted list
+                                step_indices.append((self.item_size - index)/np.float32(self.item_size))
+                            else:
+                                step_indices.append(0)  # If not found, assign -1 (optional, depends on your use case)
+                        
+                        prob.append(step_indices)  # Append the indices for this step
+
+                    # Convert the results to a numpy array for easier processing if needed
+                    prob = np.array(prob).T  # Transpose to match the user-step structure
+
 
                     if i == 0:
+                        prob_list_interv = prob
                         pred_list_interv = prob_rec
                         answer_list_interv = answers.cpu().detach().numpy()
                     else:
+                        prob_list_interv = np.append(prob_list_interv, prob, axis = 0)
                         pred_list_interv = np.append(pred_list_interv, prob_rec, axis = 0)
                         answer_list_interv = np.append(answer_list_interv, answers.cpu().detach().numpy(), axis = 0)
+                    
+                    BCE, AHR01, AHR02, AHR05, AUC = interv_metric(prob, answers.cpu().detach().numpy())
 
+                    BCE_score.append(BCE)
+                    AHR01_score.append(AHR01)
+                    AHR02_score.append(AHR02)
+                    AHR05_score.append(AHR05)
+                    AUC_score.append(AUC)
+
+            interv_scores, log_info = self.get_bootstrap(BCE_score, AHR01_score, AHR02_score, AHR05_score, AUC_score)
             
-
-            return scores, pred_list_interv, answer_list_interv
+            return interv_scores, scores, prob_list_interv, pred_list_interv, answer_list_interv
 
 
 class Trainer_csrec:
@@ -307,6 +359,21 @@ class Trainer_csrec:
         self.logger.info(post_fix)
 
         return [recall[0], ndcg[0], recall[1], ndcg[1], recall[3], ndcg[3]], str(post_fix)
+    
+    def get_bootstrap(self, BCE_score, AHR01_score, AHR02_score, AHR05_score, AUC_score):
+
+        post_fix = {
+            "Avg. BCE": '{:.4f}'.format(np.mean(BCE_score)), "std, BCE": '{:.4f}'.format(np.std(BCE_score)),
+            "Avg. AHR01": '{:.4f}'.format(np.mean(AHR01_score)), "std, AHR01": '{:.4f}'.format(np.std(AHR01_score)),
+            "Avg. AHR02": '{:.4f}'.format(np.mean(AHR02_score)), "std, AHR02": '{:.4f}'.format(np.std(AHR02_score)),
+            "Avg. AHR05": '{:.4f}'.format(np.mean(AHR05_score)), "std, AHR05": '{:.4f}'.format(np.std(AHR05_score)),
+            "Avg. AUC": '{:.4f}'.format(np.mean(AUC_score)), "std, AUC": '{:.4f}'.format(np.std(AUC_score))
+        }
+        self.logger.info(post_fix)
+
+        return [np.mean(BCE_score),np.std(BCE_score), np.mean(AHR01_score), np.std(AHR01_score), 
+                np.mean(AHR02_score), np.std(AHR02_score),np.mean(AHR05_score), np.std(AHR05_score),
+                np.mean(AUC_score), np.std(AUC_score)], str(post_fix)
 
     def iteration(self, epoch, dataloader, num_users, train=True, obs_test = True, dec_input_choice = "rating", interv_test = True, cutoff = 0.85):
 
@@ -357,7 +424,6 @@ class Trainer_csrec:
 
         else:
             self.model.eval()
-            above_threshold = 0.
 
             pred_list_interv = None
             answer_list_interv = None
@@ -365,6 +431,12 @@ class Trainer_csrec:
             pred_list_obs = None
             answer_list_obs = None
 
+            BCE_score = []
+            AHR01_score = []
+            AHR02_score = []
+            AHR05_score = []
+            AUC_score = []
+            
             for i, batch in rec_data_iter:
                 batch = tuple(t.to(self.device) for t in batch)
 
@@ -453,10 +525,15 @@ class Trainer_csrec:
                         pred_list_interv = np.append(pred_list_interv, prob_rec, axis = 0)
                         answer_list_interv = np.append(answer_list_interv, answers.cpu().detach().numpy(), axis = 0)
 
-            scores_obs, result_info_obs = self.get_full_sort_score(epoch, answer_list_obs, pred_list_obs)
-            # test_info = {
-            # "Epoch": epoch,
-            # "Above threshold": "{:.4f}".format(above_threshold/num_users)}
-            # self.logger.info(test_info)
+                    BCE, AHR01, AHR02, AHR05, AUC = interv_metric(prob_rec, answers.cpu().detach().numpy())
 
-            return scores_obs, pred_list_interv, answer_list_interv
+                    BCE_score.append(BCE)
+                    AHR01_score.append(AHR01)
+                    AHR02_score.append(AHR02)
+                    AHR05_score.append(AHR05)
+                    AUC_score.append(AUC)
+
+            interv_scores, log_info = self.get_bootstrap(BCE_score, AHR01_score, AHR02_score, AHR05_score, AUC_score)
+            scores_obs, result_info_obs = self.get_full_sort_score(epoch, answer_list_obs, pred_list_obs)
+
+            return interv_scores, scores_obs, pred_list_interv, answer_list_interv

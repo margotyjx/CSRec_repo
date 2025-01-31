@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from model._abstract_model import SequentialRecModel
-from model._modules import LayerNorm, BSARecBlock
+from model._modules import LayerNorm, BSARecBlock, TransformerEncoder, FMLPRecBlock
 
 
 # need to add a feed forward to predict the probability
@@ -22,6 +22,27 @@ class CSRecEncoder(nn.Module):
         if not output_all_encoded_layers:
             all_encoder_layers.append(hidden_states) # hidden_states => torch.Size([256, 50, 64])
         return all_encoder_layers
+    
+class FMLPRecEncoder(nn.Module):
+    def __init__(self, args):
+        super(FMLPRecEncoder, self).__init__()
+        self.args = args
+        block = FMLPRecBlock(args)
+
+        self.blocks = nn.ModuleList([copy.deepcopy(block) for _ in range(args.num_hidden_layers)])
+
+    def forward(self, hidden_states, output_all_encoded_layers=False):
+
+        all_encoder_layers = [ hidden_states ]
+
+        for layer_module in self.blocks:
+            hidden_states = layer_module(hidden_states,)
+            if output_all_encoded_layers:
+                all_encoder_layers.append(hidden_states)
+        if not output_all_encoded_layers:
+            all_encoder_layers.append(hidden_states) # hidden_states => torch.Size([256, 50, 64])
+
+        return all_encoder_layers
 
 class CSRecModel(SequentialRecModel):
     def __init__(self, args, pretrain_model):
@@ -29,7 +50,12 @@ class CSRecModel(SequentialRecModel):
         self.args = args
         self.LayerNorm = LayerNorm(args.hidden_size, eps=1e-12)
         self.dropout = nn.Dropout(args.hidden_dropout_prob)
-        self.item_encoder = CSRecEncoder(args)
+        if args.model_type == 'BSARec':
+            self.item_encoder = CSRecEncoder(args)
+        elif args.model_type == 'SASRec' or args.model_type == 'bert4rec':
+            self.item_encoder = TransformerEncoder(args)
+        elif args.model_type == 'fmlprec':
+            self.item_encoder = FMLPRecEncoder(args)
         self.apply(self.init_weights)
         self.pretrain_model = pretrain_model
 
@@ -38,10 +64,16 @@ class CSRecModel(SequentialRecModel):
         # sequence_emb = self.add_position_decision_embedding(rec_ids, decision_input)
         sequence_emb = self.add_position_rec_decision_embedding(user_seq, rec_ids, decision_input)
 
-        item_encoded_layers = self.item_encoder(sequence_emb,
+        if self.args.model_type =="fmlprec":
+            item_encoded_layers = self.item_encoder(sequence_emb,
+                                                output_all_encoded_layers=True,
+                                                )            
+        else:
+            item_encoded_layers = self.item_encoder(sequence_emb,
                                                 extended_attention_mask,
                                                 output_all_encoded_layers=True,
-                                                )               
+                                                )  
+             
         if all_sequence_output:
             sequence_output = item_encoded_layers
         else:

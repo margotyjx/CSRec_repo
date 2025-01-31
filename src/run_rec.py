@@ -7,15 +7,35 @@ from trainers import Trainer_rec
 from utils import EarlyStopping, check_path, set_seed, parse_args, set_logger
 from obs_dataset import get_seq_dic, get_dataloder, get_rating_matrix
 import interv_dataset 
+from sklearn.metrics import roc_auc_score
 
 #get_seq_dic, get_dataloder, generation_matrix_flex
 
 
-def interv_metric(pred_list_interv, answer_list_interv,logger):
+def interv_metric(prob_list_interv, pred_list_interv, answer_list_interv,logger):
+    count1 = 0.9
+    count2 = 0.8
+    count3 = 0.5
+
+    pred_list_interv_convert_1 = np.piecewise(prob_list_interv, [prob_list_interv < count1, prob_list_interv >= count1], [0, 1])
+    pred_list_interv_convert_2 = np.piecewise(prob_list_interv, [prob_list_interv < count2, prob_list_interv >= count2], [0, 1])
+    pred_list_interv_convert_3 = np.piecewise(prob_list_interv, [prob_list_interv < count3, prob_list_interv >= count3], [0, 1])
+
+    equal1 = np.argwhere(np.equal(pred_list_interv_convert_1, answer_list_interv)==True)
+    equal2 = np.argwhere(np.equal(pred_list_interv_convert_2, answer_list_interv)==True)
+    equal3 = np.argwhere(np.equal(pred_list_interv_convert_3, answer_list_interv)==True)
+
+    interv_err = torch.nn.BCELoss()(torch.from_numpy(prob_list_interv).to(torch.float32), 
+                                     torch.from_numpy(answer_list_interv).to(torch.float32))
+
     interv_err = torch.nn.BCELoss()(torch.from_numpy(pred_list_interv).to(torch.float32), torch.from_numpy(answer_list_interv).to(torch.float32))
     equal = np.argwhere(np.equal(pred_list_interv, answer_list_interv)==True)
 
-    logger.info('interventional error, BCE loss: {}, accuracy percentage: {}'.format(interv_err, len(equal)/(len(pred_list_interv)*len(pred_list_interv[0]))))
+    logger.info('interventional error, BCE loss: {}, accuracy percentage @ 0.1: {}, @ 0.2: {}, @ 0.5: {}, AUC: {}'.format(interv_err, 
+                len(equal1)/(len(pred_list_interv)*len(pred_list_interv[0])), 
+                len(equal2)/(len(pred_list_interv)*len(pred_list_interv[0])),
+                len(equal3)/(len(pred_list_interv)*len(pred_list_interv[0])),
+                roc_auc_score(answer_list_interv, prob_list_interv)))
 
     return [-interv_err, len(equal)/(len(pred_list_interv)*len(pred_list_interv[0]))]
 
@@ -66,7 +86,7 @@ def main():
             args.checkpoint_path = os.path.join(args.output_dir, args.load_model + '.pt')
             trainer.load(args.checkpoint_path)
             logger.info(f"Load model from {args.checkpoint_path} for test!")
-            scores, pred_list_interv, answer_list_interv = trainer.test(0,seq_dic['num_users'])
+            interv_test_score, scores, prob_list_interv, pred_list_interv, answer_list_interv = trainer.test(0,seq_dic['num_users'], ratio = 0.2)
 
 # train model
     else:
@@ -74,33 +94,20 @@ def main():
         # Early stops the training if validation loss doesn't improve after a given patience.
         for epoch in range(args.epochs):
             trainer.train(epoch, args.TE_model)
-            scores, pred_list_interv, answer_list_interv = trainer.valid(epoch)
+            interv_test_score, scores, prob_list_interv, pred_list_interv, answer_list_interv = trainer.valid(epoch)
             # evaluate on MRR
             early_stopping(np.array(scores[-1:]), trainer.model)
             if early_stopping.early_stop:
                 logger.info("Early stopping")
                 break
-        
-        trainer.save(args.checkpoint_path)
 
         logger.info("---------------Test Score---------------")
         trainer.model.load_state_dict(torch.load(args.checkpoint_path))
-        test_score, pred_list_interv, answer_list_interv = trainer.test(0, seq_dic['num_users'])
+        interv_test_score, test_score, prob_list_interv, pred_list_interv, answer_list_interv = trainer.test(0, seq_dic['num_users'], ratio = 0.5)
 
-        # test_info = {
-        #     "HR@5": '{:.4f}'.format(test_score[0]), "NDCG@5": '{:.4f}'.format(test_score[1]),
-        #     "HR@10": '{:.4f}'.format(test_score[2]), "NDCG@10": '{:.4f}'.format(test_score[3]),
-        #     "HR@20": '{:.4f}'.format(test_score[4]), "NDCG@20": '{:.4f}'.format(test_score[5])
-        # }
 
-    interv_err = interv_metric(pred_list_interv, answer_list_interv,logger)
-    # interv_err = torch.nn.BCELoss()(torch.from_numpy(pred_list_interv).to(torch.float32), torch.from_numpy(answer_list_interv).to(torch.float32))
-    # equal = np.argwhere(np.equal(pred_list_interv, answer_list_interv)==True)
-    # print('interventional error, BCE loss: {}, accuracy percentage: {}'.format(interv_err, len(equal)/(len(pred_list_interv)*len(pred_list_interv[0]))))
+    interv_err = interv_metric(prob_list_interv, pred_list_interv, answer_list_interv,logger)
 
     logger.info(args.train_name)
-    # logger.info(scores)
-    # logger.info(test_info)
-
 
 main()
